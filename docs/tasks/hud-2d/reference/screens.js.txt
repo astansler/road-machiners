@@ -1,0 +1,230 @@
+// ROAM HUD v4 \u00b7 what the screens show. Every function draws one readout: (ctx, W, H, state, time, palette).
+import { F_MONO, F_SLAB, F_HAND } from './fonts.js';
+
+export const GRID = { cols: 4, rows: 12, items: [] }; // filled from hud-states.json
+export const ICON = {"mg":[0,0],"shotgun":[128,0],"longRifle":[256,0],"flamer":[384,0],"pneumobolter":[512,0],"slugCannon":[640,0],"heavyMg":[768,0],"cannon":[896,0],"amRifle":[1024,0],"autocannon":[1152,0],"recoilless":[1280,0],"battleRifle":[1408,0],"gatling":[1536,0],"rocketRack":[1664,0],"sniperCannon":[1792,0],"grenadeLauncher":[1920,0],"tankGun":[0,128],"flechette":[128,128],"harpoon":[256,128],"sprout":[384,128],"caltrops":[512,128],"oilSpiller":[640,128],"patcherCrane":[768,128],"smokeMortar":[896,128],"flareCannon":[1024,128],"scrapersKnife":[1152,128],"emitter":[1280,128],"stockEngine":[1408,128],"tunedEngine":[1536,128],"flatFour":[1664,128],"workhorseDiesel":[1792,128],"racingV6":[1920,128],"heavyDiesel":[0,256],"turbine":[128,256],"plates":[256,256],"cage":[384,256],"ram":[512,256],"scrapPanels":[640,256],"ceramicPlates":[768,256],"spacedArmor":[896,256],"reinforcedCage":[1024,256],"plowRam":[1152,256],"claymoreRam":[1280,256],"steelPlate":[1408,256],"scrapSheet":[1536,256],"ceramicTile":[1664,256],"spacedTile":[1792,256],"cageSection":[1920,256],"reinforcedSection":[0,384],"spikeCluster":[128,384],"spikeStrip":[256,384],"rack":[384,384],"trailerBox":[512,384],"panniers":[640,384],"flatbed":[768,384],"lightFrame":[896,384],"enclosedFrame":[1024,384],"heavyFrame":[1152,384],"jerrycans":[1280,384],"supplyLocker":[1408,384],"cab":[1536,384],"cabPickup":[1664,384],"cabHardtop":[1792,384],"cabBroad":[1920,384],"transmission":[0,512],"transmissionMid":[128,512],"transmissionHeavy":[256,512],"wheel":[384,512],"wheelMid":[512,512],"wheelHeavy":[640,512],"tank":[768,512],"tankLong":[896,512],"tankMid":[1024,512],"tankHeavy":[1152,512],"scanner":[1280,512],"scrap":[1408,512],"salt":[1536,512],"meds":[1664,512],"grain":[1792,512],"textiles":[1920,512],"tools":[0,640],"batteries":[128,640],"electronics":[256,640],"parts":[384,640],"fuelDrums":[512,640],"water":[640,640],"relics":[768,640],"rations":[896,640],"parcel":[1024,640]};
+const sprite = new Image(); sprite.src = new URL('assets/items.svg', import.meta.url).href;
+const tmp = document.createElement('canvas'); tmp.width = tmp.height = 128;
+
+// I18N.tr (set by the 2D HUD) translates screen words; a longer translation is narrowed to the original's width
+export const I18N = { tr: null };
+export const T = (c, s, x, y, px, col, al = 'left', w = 700, f = F_MONO) => {
+  if (I18N.tr) { const t = I18N.tr(String(s), 'screen'); if (t !== String(s)) { c.font = `${w} ${px}px ${f}`; const w0 = c.measureText(String(s)).width, w1 = c.measureText(t).width; if (w0 > 0 && w1 > w0 * 1.02) px *= Math.max(0.62, w0 / w1); s = t; } }
+  c.font = `${w} ${px}px ${f}`; c.fillStyle = col; c.textAlign = al; c.textBaseline = 'middle'; c.fillText(s, x, y);
+};
+const lvl = (v, warn, bad, inv) => inv ? (v <= bad ? 2 : v <= warn ? 1 : 0) : (v >= bad ? 2 : v >= warn ? 1 : 0);
+const lc = (P, l) => l === 2 ? P.hot : l === 1 ? P.warn : P.fg;
+const blink = t => (t * 2.2 % 1) < 0.55;
+export const fuelLvl = s => lvl(s.fuel, 25, 10, true), engLvl = s => lvl(s.eng, 95, 112), hpLvl = s => lvl(s.health, 60, 30, true);
+export const hull = s => Math.round(s.parts.reduce((a, p) => a + p.hp, 0) / s.parts.length);
+const meters = d => { const v = parseFloat(d); return /km/.test(d) ? v * 1000 : v; };
+const hash = str => { let h = 7; for (const ch of str) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+
+export function icon(c, name, x, y, size, col) {
+  const p = ICON[name]; if (!p || !sprite.complete || !sprite.naturalWidth) return;
+  const k = tmp.getContext('2d'); k.globalCompositeOperation = 'source-over'; k.clearRect(0, 0, 128, 128);
+  try { k.drawImage(sprite, p[0], p[1], 128, 128, 0, 0, 128, 128); } catch (e) { return; }
+  k.globalCompositeOperation = 'source-in'; k.fillStyle = col; k.fillRect(0, 0, 128, 128);
+  c.drawImage(tmp, x, y, size, size);
+}
+
+export function iconColor(c, name, x, y, size) { const p = ICON[name]; if (!p || !sprite.complete || !sprite.naturalWidth) return; try { c.drawImage(sprite, p[0], p[1], 128, 128, x, y, size, size); } catch (e) {} }
+
+/* seven-segment digits */
+const SEG = { 0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abfgcd', '-': 'g', L: 'fed', C: 'afed', d: 'bcdeg', E: 'afged', H: 'fbgec', ' ': '' };
+export function seg7(c, str, x, y, h, on, off) { // right edge at x when align right is wanted: use seg7w first
+  const w = h * 0.52, th = h * 0.12, gap = h * 0.16; let cx = x;
+  const bar = (x1, y1, x2, y2) => { c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); };
+  c.lineCap = 'round'; c.lineWidth = th;
+  for (const ch of String(str)) {
+    if (ch === ':' || ch === '.') { c.fillStyle = on; if (ch === ':') { c.fillRect(cx, y + h * 0.28, th, th); c.fillRect(cx, y + h * 0.66, th, th); } else c.fillRect(cx, y + h - th, th, th); cx += th + gap; continue; }
+    const L = cx + th / 2, R = cx + w - th / 2, Tp = y + th / 2, M = y + h / 2, B = y + h - th / 2, i = th * 0.75;
+    const segs = { a: [L + i, Tp, R - i, Tp], b: [R, Tp + i, R, M - i], c: [R, M + i, R, B - i], d: [L + i, B, R - i, B], e: [L, M + i, L, B - i], f: [L, Tp + i, L, M - i], g: [L + i, M, R - i, M] };
+    const lit = SEG[ch] ?? '';
+    for (const k in segs) { c.strokeStyle = lit.includes(k) ? on : off; if (lit.includes(k) || off) bar(...segs[k]); }
+    cx += w + gap;
+  }
+  return cx - gap - x;
+}
+export const seg7w = (str, h) => [...String(str)].reduce((a, ch) => a + ((ch === ':' || ch === '.') ? h * 0.12 : h * 0.52) + h * 0.16, 0) - h * 0.16;
+export function segR(c, str, xr, y, h, on, off) { return seg7(c, str, xr - seg7w(str, h), y, h, on, off); }
+
+/* ───── drive ───── */
+export function headingTape(c, x, y, w, h, s, P) {
+  c.save(); c.beginPath(); c.rect(x, y, w, h); c.clip();
+  const ppd = w / 110, cx = x + w / 2;
+  for (let d = Math.floor(s.heading / 10) * 10 - 60; d <= s.heading + 60; d += 10) {
+    const px = cx + (d - s.heading) * ppd, dd = ((d % 360) + 360) % 360, big = dd % 30 === 0;
+    c.fillStyle = big ? P.fg : P.dim; c.fillRect(px - 1, y + h * (big ? 0.5 : 0.68), 2, h * (big ? 0.5 : 0.32));
+    if (big) T(c, { 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[dd] ?? String(dd / 10).padStart(2, '0'), px, y + h * 0.26, h * 0.42, dd % 90 ? P.dim : P.fg, 'center');
+  }
+  c.restore(); c.fillStyle = P.fg; c.beginPath(); c.moveTo(cx, y + h * 0.55); c.lineTo(cx - h * 0.2, y + h); c.lineTo(cx + h * 0.2, y + h); c.fill();
+}
+export function speedBar(c, x, y, w, h, s, P) {
+  const k = v => x + w * v / s.top; c.strokeStyle = P.dim; c.lineWidth = 2; c.strokeRect(x, y, w, h);
+  c.fillStyle = P.fg; c.fillRect(x + 3, y + 3, Math.max(0, k(s.speed) - x - 6), h - 6);
+  c.save(); c.beginPath(); c.rect(k(s.limit), y, x + w - k(s.limit), h); c.clip(); c.strokeStyle = s.limit < s.top * 0.6 ? P.hot : P.dim; c.lineWidth = 3;
+  for (let i = -h; i < w; i += 9) { c.beginPath(); c.moveTo(x + i, y + h); c.lineTo(x + i + h, y); c.stroke(); } c.restore();
+  for (let v = 0; v <= s.top; v += 10) { c.fillStyle = P.dim; c.fillRect(k(v) - 1, y + h + 2, 2, v % 30 ? 4 : 8); }
+  c.fillStyle = P.warn; c.beginPath(); c.moveTo(k(s.hold), y - 2); c.lineTo(k(s.hold) - 6, y - 11); c.lineTo(k(s.hold) + 6, y - 11); c.fill();
+}
+export function nav(c, W, H, s, t, P) { // speed + heading on one tube
+  headingTape(c, W * 0.05, H * 0.05, W * 0.9, H * 0.2, s, P);
+  c.fillStyle = P.dim; c.fillRect(W * 0.05, H * 0.29, W * 0.9, 2);
+  const lim = s.limit < s.top * 0.6;
+  seg7(c, String(s.speed).padStart(2, ' '), W * 0.07, H * 0.37, H * 0.36, P.fg, null);
+  T(c, 'KM/H', W * 0.44, H * 0.66, H * 0.1, P.dim);
+  T(c, String(s.heading).padStart(3, '0') + '°', W * 0.95, H * 0.42, H * 0.15, P.fg, 'right');
+  T(c, 'LIM ' + s.limit, W * 0.95, H * 0.6, H * 0.11, lim ? (blink(t) ? P.hot : P.dim) : P.dim, 'right');
+  speedBar(c, W * 0.07, H * 0.82, W * 0.86, H * 0.08, s, P);
+}
+export function speedOnly(c, W, H, s, t, P) {
+  const lim = s.limit < s.top * 0.6; segR(c, String(s.speed), W * 0.62, H * 0.14, H * 0.5, P.fg, P.dim + '55');
+  T(c, 'KM/H', W * 0.66, H * 0.26, H * 0.15, P.dim); T(c, 'LIM ' + s.limit, W * 0.66, H * 0.5, H * 0.15, lim ? P.hot : P.dim);
+  speedBar(c, W * 0.06, H * 0.8, W * 0.88, H * 0.1, s, P);
+}
+export function compassRose(c, W, H, s, t, P) { // fixed rose, turning needle
+  const R = Math.min(W, H) * 0.44, cx = W / 2, cy = H / 2; c.strokeStyle = P.dim; c.lineWidth = 2; c.beginPath(); c.arc(cx, cy, R, 0, 7); c.stroke();
+  for (let d = 0; d < 360; d += 15) { const a = d * Math.PI / 180, k = d % 90 ? (d % 45 ? 0.9 : 0.84) : 0.78; c.beginPath(); c.moveTo(cx + Math.sin(a) * R, cy - Math.cos(a) * R); c.lineTo(cx + Math.sin(a) * R * k, cy - Math.cos(a) * R * k); c.stroke(); }
+  [['N', 0, -1], ['E', 1, 0], ['S', 0, 1], ['W', -1, 0]].forEach(([l, x, y]) => T(c, l, cx + x * R * 0.6, cy + y * R * 0.6, R * 0.3, l === 'N' ? P.fg : P.dim, 'center'));
+  const a = s.heading * Math.PI / 180; c.save(); c.translate(cx, cy); c.rotate(a); c.fillStyle = P.fg; c.beginPath(); c.moveTo(0, -R * 0.92); c.lineTo(R * 0.13, R * 0.1); c.lineTo(0, 0); c.lineTo(-R * 0.13, R * 0.1); c.fill(); c.restore();
+}
+
+/* ───── truck ───── */
+const PART = { 'Stock engine': 'engine', 'MG turret': 'turret', Cab: 'cab', 'Rebar cage': 'cage', Transmission: 'trans' };
+export function truck(c, x, y, w, h, s, t, P, horiz) { // top-down grid of what is fitted; nose up, or nose right when horiz
+  const hp = Object.fromEntries(s.parts.map(p => [p.k, p.hp]));
+  const cols = GRID.cols, rows = GRID.rows, cell = horiz ? Math.min(w / (rows + 1), h / (cols + 2)) : Math.min(w / (cols + 2), h / (rows + 1));
+  const ox = horiz ? x + (w - rows * cell) / 2 : x + (w - cols * cell) / 2, oy = horiz ? y + (h - cols * cell) / 2 : y + (h - rows * cell) / 2;
+  const rect = (col, row, cw, ch, key, plain) => {
+    const X = horiz ? ox + (rows - row - ch + 1) * cell : ox + (col - 1) * cell, Y = horiz ? oy + (col - 1) * cell : oy + (row - 1) * cell, Wd = (horiz ? ch : cw) * cell, Hd = (horiz ? cw : ch) * cell;
+    const v = key ? hp[key] ?? 100 : 100, l = v < 40 ? 2 : v < 70 ? 1 : 0;
+    c.lineWidth = 2; c.strokeStyle = plain ? P.dim : lc(P, l); c.strokeRect(X + 2, Y + 2, Wd - 4, Hd - 4);
+    if (l === 2 ? blink(t) : l === 1) { c.fillStyle = lc(P, l); c.globalAlpha = l === 2 ? 0.85 : 0.4; c.fillRect(X + 2, Y + 2, Wd - 4, Hd - 4); c.globalAlpha = 1; }
+    else if (!plain) { c.fillStyle = P.fg; c.globalAlpha = 0.13; c.fillRect(X + 2, Y + 2, Wd - 4, Hd - 4); c.globalAlpha = 1; }
+  };
+  c.strokeStyle = P.dim; c.lineWidth = 1; c.setLineDash([3, 4]);
+  if (horiz) c.strokeRect(ox, oy, rows * cell, cols * cell); else c.strokeRect(ox, oy, cols * cell, rows * cell); c.setLineDash([]);
+  for (const it of GRID.items) rect(it.col, it.row, it.w, it.h, PART[it.name], !PART[it.name]);
+  rect(2, 8, 2, 1, 'tank');
+  for (const [col, row] of [[0, 2], [5, 2], [0, 10], [5, 10]]) rect(col, row, 1, 2, 'wheels');
+}
+export function truckScreen(c, W, H, s, t, P) { // wide: truck nose right + hull and driver
+  truck(c, W * 0.02, H * 0.06, W * 0.62, H * 0.88, s, t, P, true);
+  const hl = hull(s), worst = [...s.parts].sort((a, b) => a.hp - b.hp)[0];
+  T(c, 'HULL', W * 0.67, H * 0.14, H * 0.11, P.dim); T(c, hl + '%', W * 0.97, H * 0.3, H * 0.2, lc(P, hl < 40 ? 2 : hl < 70 ? 1 : 0), 'right');
+  T(c, 'DRIVER', W * 0.67, H * 0.5, H * 0.11, P.dim); T(c, String(s.health), W * 0.97, H * 0.66, H * 0.2, lc(P, hpLvl(s)), 'right');
+  if (worst.hp < 70) T(c, (worst.n.split(' ').pop() + ' ' + worst.hp).toUpperCase(), W * 0.97, H * 0.88, H * 0.1, lc(P, worst.hp < 40 ? 2 : 1), 'right');
+}
+export function truckTall(c, W, H, s, t, P) {
+  const hl = hull(s); T(c, 'HULL ' + hl + '%', W / 2, H * 0.07, H * 0.075, lc(P, hl < 40 ? 2 : hl < 70 ? 1 : 0), 'center');
+  truck(c, W * 0.05, H * 0.13, W * 0.9, H * 0.84, s, t, P, false);
+}
+export function vitals(c, W, H, s, t, P) { // driver trace, supplies, load, power
+  const l = hpLvl(s); c.strokeStyle = lc(P, l); c.lineWidth = 2.5; c.beginPath();
+  for (let i = 0; i <= 60; i++) { const u = i / 60, ph = (u * 3 + t * 0.6) % 1, yy = ph < 0.08 ? -0.9 : ph < 0.14 ? 0.7 : ph < 0.2 ? -0.25 : Math.sin(u * 40) * 0.04; c.lineTo(W * (0.04 + u * 0.56), H * 0.27 + yy * H * 0.14 * (s.health / 100 + 0.2)); } c.stroke();
+  T(c, 'DRV', W * 0.66, H * 0.16, H * 0.1, P.dim); T(c, String(s.health), W * 0.96, H * 0.3, H * 0.2, lc(P, l), 'right');
+  c.fillStyle = P.dim; c.fillRect(W * 0.04, H * 0.47, W * 0.92, 2);
+  T(c, 'SUP', W * 0.04, H * 0.6, H * 0.1, P.dim); const n = s.supMax, pw = W * 0.66 / n;
+  for (let i = 0; i < n; i++) { c.fillStyle = i < s.supplies ? (s.supplies <= 2 ? P.warn : P.fg) : P.dim; c.globalAlpha = i < s.supplies ? 1 : 0.35; c.fillRect(W * 0.2 + i * pw, H * 0.55, pw - 2, H * 0.1); } c.globalAlpha = 1;
+  T(c, s.supplies + '/' + s.supMax, W * 0.96, H * 0.6, H * 0.1, s.supplies <= 2 ? P.warn : P.fg, 'right');
+  T(c, 'LOAD ' + (s.load / 1000).toFixed(1) + '/' + (s.loadMax / 1000).toFixed(1) + ' T', W * 0.04, H * 0.78, H * 0.095, P.dim);
+  T(c, 'PWR ' + s.power + '/' + s.powerMax, W * 0.04, H * 0.91, H * 0.095, P.dim);
+}
+export function tanks(c, W, H, s, t, P) { // fuel and heat as two bars
+  const row = (y, name, v, max, l, txt, marks) => {
+    T(c, name, W * 0.04, y, H * 0.13, P.dim); const x = W * 0.25, w = W * 0.45, h = H * 0.16;
+    c.strokeStyle = P.dim; c.lineWidth = 2; c.strokeRect(x, y - h / 2, w, h); c.fillStyle = l === 2 && !blink(t) ? P.dim : lc(P, l); c.fillRect(x + 3, y - h / 2 + 3, (w - 6) * Math.min(1, v / max), h - 6);
+    for (const m of marks) { c.fillStyle = P.bg; c.fillRect(x + w * m - 1, y - h / 2, 2, h); c.fillStyle = P.dim; c.fillRect(x + w * m - 1, y + h / 2, 2, 5); }
+    T(c, txt, W * 0.97, y, H * 0.15, lc(P, l), 'right');
+  };
+  row(H * 0.2, 'FUEL', s.fuel, s.tank, fuelLvl(s), s.fuel + ' L', [10 / 60, 25 / 60]);
+  row(H * 0.5, 'ENG', s.eng, s.engMax, engLvl(s), s.eng + '°', [95 / 120, 112 / 120]);
+  T(c, '≈' + (s.fuel * 0.4).toFixed(1) + ' KM  ' + s.fuelRate + ' L', W * 0.04, H * 0.8, H * 0.11, P.dim);
+  T(c, 'OUT ' + s.out + '°', W * 0.97, H * 0.8, H * 0.11, lc(P, lvl(s.out, 38, 50)), 'right');
+}
+
+/* ───── world ───── */
+export function radar(c, W, H, s, t, P) {
+  const R = Math.min(W, H) * 0.46, cx = W / 2, cy = H / 2;
+  c.strokeStyle = P.dim; c.lineWidth = 1.5; for (const k of [1 / 3, 2 / 3, 1]) { c.beginPath(); c.arc(cx, cy, R * k, 0, 7); c.stroke(); }
+  c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.moveTo(cx, cy - R); c.lineTo(cx, cy + R); c.stroke();
+  const sw = t * 1.1; c.fillStyle = P.fg; c.globalAlpha = 0.16; c.beginPath(); c.moveTo(cx, cy); c.arc(cx, cy, R, sw - 0.5, sw); c.fill(); c.globalAlpha = 1;
+  c.strokeStyle = P.fg; c.lineWidth = 2; c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(sw) * R, cy + Math.sin(sw) * R); c.stroke();
+  const ha = s.heading * Math.PI / 180; c.fillStyle = P.fg; c.beginPath(); c.moveTo(cx + Math.sin(ha) * R * 0.14, cy - Math.cos(ha) * R * 0.14); c.lineTo(cx + Math.sin(ha + 2.5) * R * 0.09, cy - Math.cos(ha + 2.5) * R * 0.09); c.lineTo(cx + Math.sin(ha - 2.5) * R * 0.09, cy - Math.cos(ha - 2.5) * R * 0.09); c.fill();
+  for (const [name, , dist, stance, sel] of s.contacts) {
+    const k = Math.min(1, Math.log10(Math.max(60, meters(dist)) / 60) / Math.log10(50)), a = (hash(name) % 628) / 100, x = cx + Math.cos(a) * R * k * 0.95, y = cy + Math.sin(a) * R * k * 0.95, z = R * 0.075;
+    const col = stance === 'hostile' ? P.hot : stance === 'friendly' ? P.fg : P.warn; c.fillStyle = col; c.strokeStyle = col; c.lineWidth = 2;
+    if (stance === 'hostile') { c.beginPath(); c.moveTo(x, y - z * 1.3); c.lineTo(x + z, y); c.lineTo(x, y + z * 1.3); c.lineTo(x - z, y); c.fill(); }
+    else if (stance === 'friendly') { c.beginPath(); c.arc(x, y, z * 0.9, 0, 7); c.fill(); }
+    else if (stance) c.strokeRect(x - z * 0.8, y - z * 0.8, z * 1.6, z * 1.6); else { c.beginPath(); c.moveTo(x - z, y - z); c.lineTo(x + z, y + z); c.moveTo(x + z, y - z); c.lineTo(x - z, y + z); c.stroke(); }
+    if (sel && blink(t)) { c.strokeStyle = P.hot; c.strokeRect(x - z * 2, y - z * 2, z * 4, z * 4); }
+  }
+}
+export function contacts(c, W, H, s, t, P) {
+  T(c, s.contacts.length + ' IN SIGHT', W * 0.04, H * 0.11, H * 0.1, P.dim);
+  s.contacts.slice(0, 4).forEach(([n, type, d, st, sel], i) => { const y = H * (0.3 + i * 0.2), col = st === 'hostile' ? P.hot : st === 'friendly' ? P.fg : P.warn;
+    if (sel) { c.fillStyle = col; c.globalAlpha = 0.2; c.fillRect(W * 0.02, y - H * 0.09, W * 0.96, H * 0.18); c.globalAlpha = 1; }
+    T(c, (sel ? '▸' : ' ') + n.replace(/^(Scavenger|Trader|Raider) /, '').toUpperCase().slice(0, 14), W * 0.03, y, H * 0.115, col); T(c, d.toUpperCase(), W * 0.97, y, H * 0.115, col, 'right'); });
+}
+export function wrap(str, n) { const out = []; let line = ''; for (const w of str.split(' ')) { if ((line + ' ' + w).trim().length > n) { out.push(line); line = w; } else line = (line + ' ' + w).trim(); } if (line) out.push(line); return out; }
+export function pager(c, W, H, s, t, P) { // the radio's pager screen: three lines
+  const px = H * 0.21, n = Math.floor(W * 0.94 / (px * 0.5)); let lines = wrap(s.radio || '\u00b7 \u00b7 \u00b7  no carrier  \u00b7 \u00b7 \u00b7', n);
+  if (lines.length > 3) { lines = lines.slice(0, 3); lines[2] = lines[2].slice(0, n - 1) + '…'; }
+  lines.forEach((l, i) => T(c, l, W * 0.03, H * (0.2 + i * 0.3), px, P.fg, 'left', 700));
+}
+export function logLine(c, W, H, s, t, P) {
+  const [tm, msg, tone] = s.log[0] || ['', '', '']; const px = H * 0.5, n = Math.floor(W * 0.95 / (px * 0.5)) - 6;
+  T(c, tm, W * 0.02, H / 2, px, P.dim); T(c, msg.length > n ? msg.slice(0, n - 1) + '…' : msg, W * 0.02 + px * 3, H / 2, px, tone === 'bad' ? P.hot : tone === 'good' ? P.fg : P.dim);
+}
+export function alerts(c, W, H, s, t, P) {
+  if (!s.alerts.length) { T(c, 'ROAD QUIET', W / 2, H / 2, H * 0.16, P.dim, 'center'); return; }
+  s.alerts.slice(0, 3).forEach(([l, a, b], i) => { const y = H * (0.2 + i * 0.31), col = l === 'bad' ? P.hot : P.warn;
+    if (l === 'bad' && blink(t)) { c.fillStyle = col; c.fillRect(0, y - H * 0.13, W, H * 0.15); T(c, a.toUpperCase(), W * 0.04, y - H * 0.055, H * 0.13, P.bg); } else T(c, a.toUpperCase(), W * 0.04, y - H * 0.055, H * 0.13, col);
+    T(c, b.length > 34 ? b.slice(0, 33) + '…' : b, W * 0.04, y + H * 0.085, H * 0.085, P.dim); });
+}
+
+/* ───── business ───── */
+export function coin(c, x, y, r, P) { c.beginPath(); c.arc(x, y, r, 0, 7); c.strokeStyle = P.fg; c.lineWidth = Math.max(1.5, r * 0.16); c.stroke(); T(c, 'M', x, y + r * 0.06, r * 1.25, P.fg, 'center', 900, F_SLAB); }
+export function ms(c, W, H, s, t, P) { coin(c, H * 0.5, H * 0.5, H * 0.3, P); segR(c, String(s.money), W * 0.94, H * 0.2, H * 0.6, P.fg, P.dim + '44'); }
+export function contracts(c, W, H, s, t, P) {
+  const o = s.objective; T(c, o.t.toUpperCase(), W * 0.04, H * 0.13, H * 0.12, P.dim); coin(c, W * 0.7, H * 0.13, H * 0.07, P); T(c, String(s.money), W * 0.96, H * 0.135, H * 0.14, P.fg, 'right');
+  c.fillStyle = P.dim; c.fillRect(W * 0.04, H * 0.24, W * 0.92, 2);
+  o.lines.slice(0, 2).forEach(([a, b], i) => { T(c, a.length > 24 ? a.slice(0, 23) + '…' : a, W * 0.04, H * (0.4 + i * 0.3), H * 0.12, P.fg); T(c, b, W * 0.96, H * (0.54 + i * 0.3), H * 0.1, /due/.test(b) ? P.warn : P.dim, 'right'); });
+}
+export function slip(c, W, H, s, t, P) { // contract slip, typed, with a pencil note
+  const o = s.objective; c.fillStyle = 'rgba(0,0,0,.05)'; for (let y = H * 0.3; y < H; y += H * 0.16) c.fillRect(W * 0.06, y, W * 0.88, 1.5);
+  T(c, o.t.toUpperCase(), W * 0.07, H * 0.16, H * 0.1, P.fg, 'left', 700);
+  o.lines.slice(0, 2).forEach(([a, b], i) => { T(c, a, W * 0.07, H * (0.36 + i * 0.3), H * 0.085, P.fg, 'left', 400); T(c, b, W * 0.93, H * (0.5 + i * 0.3), H * 0.13, /due/.test(b) ? P.hot : '#2f4f7a', 'right', 700, F_HAND); });
+}
+export function weapons(c, W, H, s, t, P) { // three mounts, one row each
+  s.weapons.forEach((w, i) => {
+    const y0 = H * (0.03 + i * 0.325), h = H * 0.29; c.strokeStyle = P.dim; c.lineWidth = 1.5; c.strokeRect(W * 0.02, y0, W * 0.96, h);
+    if (!w) { T(c, 'MOUNT ' + (i + 1) + ' \u00b7 EMPTY', W / 2, y0 + h / 2, h * 0.3, P.dim, 'center'); return; }
+    const hot = w.st === 'firing', col = hot ? P.hot : /reload|no ammo/.test(w.st) ? P.warn : P.fg;
+    if (hot && blink(t)) { c.fillStyle = col; c.globalAlpha = 0.18; c.fillRect(W * 0.02, y0, W * 0.96, h); c.globalAlpha = 1; }
+    icon(c, w.ic, W * 0.03, y0 + h * 0.02, h * 0.96, col);
+    T(c, w.n.toUpperCase(), W * 0.03 + h, y0 + h * 0.3, h * 0.3, col);
+    T(c, (w.tgt ? '▸' + w.tgt + ' ' : '') + w.st.toUpperCase(), W * 0.03 + h, y0 + h * 0.72, h * 0.26, P.dim);
+    for (let k = 0; k < w.mag; k++) { c.fillStyle = k < w.ammo ? col : P.dim; c.globalAlpha = k < w.ammo ? 1 : 0.4; c.fillRect(W * 0.95 - (w.mag - k) * h * 0.16, y0 + h * 0.16, h * 0.11, h * 0.3); } c.globalAlpha = 1;
+    T(c, w.stat, W * 0.95, y0 + h * 0.72, h * 0.28, col, 'right');
+  });
+}
+export function weaponsRow(c, W, H, s, t, P) { // three mounts side by side
+  s.weapons.forEach((w, i) => {
+    const x0 = W * (0.01 + i * 0.333), w0 = W * 0.313; c.strokeStyle = P.dim; c.lineWidth = 1.5; c.strokeRect(x0, H * 0.05, w0, H * 0.9);
+    if (!w) { T(c, 'EMPTY', x0 + w0 / 2, H / 2, H * 0.18, P.dim, 'center'); return; }
+    const hot = w.st === 'firing', col = hot ? P.hot : /reload|no ammo/.test(w.st) ? P.warn : P.fg;
+    icon(c, w.ic, x0 + 2, H * 0.08, H * 0.5, col); T(c, w.ammo + '/' + w.mag, x0 + w0 - 5, H * 0.24, H * 0.2, col, 'right'); T(c, w.stat, x0 + w0 - 5, H * 0.48, H * 0.15, P.dim, 'right');
+    T(c, w.st.toUpperCase(), x0 + 6, H * 0.78, H * 0.16, hot && blink(t) ? P.bg : col);
+    c.fillStyle = P.dim; c.fillRect(x0 + 4, H * 0.9, (w0 - 8), 3); c.fillStyle = col; c.fillRect(x0 + 4, H * 0.9, (w0 - 8) * w.cyc / 100, 3);
+  });
+}
+export function clock(c, W, H, s, t, P) {
+  const [h, m] = s.time.split(':'); T(c, 'D' + s.day, W * 0.06, H * 0.5, H * 0.42, P.dim);
+  segR(c, h.padStart(2, ' ') + (blink(t * 0.45) ? ':' : ' ') + m, W * 0.95, H * 0.17, H * 0.66, P.fg, P.dim + '44');
+}
+export const num = (get, o = {}) => (c, W, H, s, t, P) => { // small numeric window
+  const v = get(s), l = o.lvl ? o.lvl(s) : 0; if (o.label) T(c, o.label, W * 0.05, H * 0.5, H * 0.3, P.dim);
+  segR(c, String(v), W * (o.unit ? 0.74 : 0.94), H * 0.17, H * 0.66, l === 2 && !blink(t) ? P.dim : lc(P, l), P.dim + '44'); if (o.unit) T(c, o.unit, W * 0.97, H * 0.62, H * 0.3, P.dim, 'right');
+};

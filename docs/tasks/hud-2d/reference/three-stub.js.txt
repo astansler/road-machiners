@@ -1,0 +1,9 @@
+// ROAM HUD v4 \u00b7 2D \u00b7 a stand-in for three.js.
+// The layout files (variants.js, menus.js) also build some plain 3D props (cables, the radio mic,
+// the log roller). In the 2D HUD those are already in the baked picture, so every THREE call here
+// returns one inert object that swallows any property, call or `new`.
+const handler = {
+  get(t, k) { if (k === Symbol.toPrimitive) return () => 0; if (k === 'then') return undefined; return STUB; },
+  set() { return true; }, apply() { return STUB; }, construct() { return STUB; },
+};
+export const STUB = new Proxy(function () {}, handler);

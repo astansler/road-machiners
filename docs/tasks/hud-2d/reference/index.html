@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROAM HUD - Twin pods - 2D</title>
+<link href="https://fonts.googleapis.com/css2?family=Anonymous+Pro:wght@400;700&family=Roboto+Slab:wght@400;600;700;800;900&family=Caveat:wght@700&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: grid; place-items: center; }
+  #view { position: relative; width: min(100vw, 100vh * 16 / 9); aspect-ratio: 16 / 9; overflow: hidden; }
+  #view > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+</style>
+</head>
+<body>
+<!-- the game picture stays untouched; the HUD only sits on top of it -->
+<div id="view"><img src="assets/game-picture.jpg" alt="game picture"></div>
+<script type="module">
+  import { mountHud } from './roam-hud.js';
+  import { SAMPLE } from './sample-state.js';
+  const q = new URLSearchParams(location.search);
+  window.hud = mountHud(document.querySelector('#view'), { state: structuredClone(SAMPLE), lang: q.get('lang') || 'en' }); // ?lang=ru
+</script>
+</body>
+</html>

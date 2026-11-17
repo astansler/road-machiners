@@ -1,0 +1,5 @@
+// ROAM HUD v4 \u00b7 shared ink colour and fonts (no three.js here, so the 2D runtime can use it too).
+export const INK = '#1b181a';
+export const F_MONO = '"Anonymous Pro", monospace';
+export const F_SLAB = '"Roboto Slab", serif';
+export const F_HAND = '"Caveat", cursive';

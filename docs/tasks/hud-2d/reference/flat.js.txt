@@ -1,0 +1,236 @@
+// ROAM HUD v4 \u00b7 2D runtime. Shows a baked cab with plain DOM: no WebGL, no three.js.
+//
+//   still picture   one <img> per layer (cab, menu), rendered once from the fixed camera
+//   screens, dials, key tops
+//                   <canvas> drawn by the same functions as in 3D (screens.js), put in place
+//                   with a CSS matrix3d (the exact perspective of that face)
+//   levers, knobs, pressed keys
+//                   cut-out frames from the atlas, one shown at a time
+//   lamps, LED cells
+//                   colour masks from the atlas, coloured with background-color
+//   needles         a flat needle sprite laid into the dial plane, turned with CSS rotate
+//   labels          real DOM text (labels, label tape, handwriting) set on the panel plane with matrix3d,
+//                   in the lit colour of that spot; pass { tr } to translate it
+//
+// Everything is in a 2560 × 1440 design space that is scaled to the host as one piece.
+import { PAL, shade, mix } from './kit-flat.js';
+import { F_MONO, F_SLAB } from './fonts.js';
+
+export const DESIGN_W = 2560, DESIGN_H = 1440;
+const CSS = `
+.fl-stage{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.fl-space{position:absolute;left:0;top:0;width:${DESIGN_W}px;height:${DESIGN_H}px;transform-origin:0 0}
+.fl-layer{position:absolute;left:0;top:0;width:${DESIGN_W}px;height:${DESIGN_H}px}
+.fl-layer.fl-menu{transition:transform .38s cubic-bezier(.2,.9,.3,1),opacity .2s}
+.fl-layer.fl-menu.fl-away{transform:translateY(${DESIGN_H}px);opacity:0;transition:transform .3s ease-in,opacity .3s .1s}
+.fl-layer img,.fl-s,.fl-f,.fl-n{position:absolute;display:block}
+.fl-s{background-repeat:no-repeat}
+.fl-hit{position:absolute;pointer-events:auto;cursor:pointer}
+.fl-t{position:absolute}.fl-t>div{position:absolute;left:0;top:0;transform-origin:0 0}
+.fl-t span{position:absolute;left:0;top:0;white-space:pre;line-height:1;transform-origin:0 0;-webkit-font-smoothing:antialiased}
+.fl-t span.fl-dymo{box-shadow:inset 0 2.5px 0 rgba(255,255,255,.14)}
+.fl-slot{position:absolute;left:0;top:0;transform-origin:0 0;overflow:hidden;pointer-events:auto;box-sizing:border-box}
+.fl-m{-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
+.fl-f>canvas,.fl-n>div{position:absolute;left:0;top:0;transform-origin:0 0}
+.fl-n>div>div{width:100%;height:100%;background-repeat:no-repeat;transform-origin:50% 50%}
+.fl-n>div>div>div{width:100%;height:100%;background-repeat:no-repeat;animation:fl-quiver .565s linear infinite}
+@keyframes fl-quiver{0%{transform:rotate(0)}25%{transform:rotate(-.23deg)}50%{transform:rotate(0)}75%{transform:rotate(.23deg)}100%{transform:rotate(0)}}
+`;
+let styled = false;
+const el = (tag, cls, parent) => { const e = document.createElement(tag); if (cls) e.className = cls; if (parent) parent.append(e); return e; };
+const place = (e, x, y, w, h) => { e.style.left = x + 'px'; e.style.top = y + 'px'; e.style.width = w + 'px'; e.style.height = h + 'px'; return e; };
+const m3d = m => `matrix3d(${m.join(',')})`;
+
+/* 3 × 3 homography helpers for hit tests on faces */
+const H3 = m => [m[0], m[4], m[12], m[1], m[5], m[13], m[3], m[7], m[15]];
+function inv3(a) {
+  const [a0, a1, a2, a3, a4, a5, a6, a7, a8] = a, b01 = a8 * a4 - a5 * a7, b11 = -a8 * a3 + a5 * a6, b21 = a7 * a3 - a4 * a6, d = a0 * b01 + a1 * b11 + a2 * b21;
+  return [b01, -a8 * a1 + a2 * a7, a5 * a1 - a2 * a4, b11, a8 * a0 - a2 * a6, -a5 * a0 + a2 * a3, b21, -a7 * a0 + a1 * a6, a4 * a0 - a1 * a3].map(v => v / d);
+}
+const apply3 = (h, x, y) => { const w = h[6] * x + h[7] * y + h[8]; return [(h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w]; };
+function inPoly(p, x, y) { let c = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) if ((p[i][1] > y) !== (p[j][1] > y) && x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) c = !c; return c; }
+
+/* one baked layer: the cab, or one menu device */
+export class FlatLayer {
+  constructor(L, parts, dir, { menu = false, tr = null, name = 'hud' } = {}) {
+    this.tr = tr; this.name = name; this.screens = [];
+    if (parts.length !== L.els.length || parts.some((p, i) => p.kind !== L.els[i].k)) throw new Error('flat: the bake does not match this layout (re-bake it with flat/bake.html)');
+    this.t = 0; this.items = []; this.hits = [];
+    const at = src => new URL(src, dir || document.baseURI).href, atlas = at(L.atlas.src), AW = L.atlas.w, AH = L.atlas.h;
+    const root = this.root = el('div', 'fl-layer' + (menu ? ' fl-menu fl-away' : ''));
+    const img = place(el('img', '', root), L.base.x, L.base.y, L.base.w, L.base.h); img.src = at(L.base.src); img.alt = ''; img.draggable = false;
+    const gA = el('div', '', root), gB = el('div', '', root), gT = el('div', '', root), gL = el('div', '', root), gC = el('div', '', root), gD = el('div', '', root); // masks, frames (with shadows), text, lever and knob bodies, faces, needles
+    this.spans = [];
+    for (const T of L.texts || []) { // one block per panel face: the face's perspective, then each line in canvas px
+      const b = T.mask || T.box, w = place(el('div', 'fl-t', gT), b[0], b[1], b[2], b[3]);
+      if (T.mask) for (const p of ['mask', 'webkitMask']) { w.style[p + 'Image'] = `url(${atlas})`; w.style[p + 'Position'] = `-${T.mask[4]}px -${T.mask[5]}px`; w.style[p + 'Size'] = `${AW}px ${AH}px`; w.style[p + 'Repeat'] = 'no-repeat'; }
+      const plane = el('div', '', w); plane.style.width = T.cw + 'px'; plane.style.height = T.ch + 'px'; plane.style.transform = `translate(${T.box[0] - b[0]}px,${T.box[1] - b[1]}px) ${m3d(T.m)}`;
+      for (const it of T.items) {
+        const sp = el('span', it.dymo ? 'fl-dymo' : '', plane); sp.textContent = it.s; sp.style.font = it.font; sp.style.color = it.color; if (it.alpha < 1) sp.style.opacity = it.alpha; if (it.ls) sp.style.letterSpacing = it.ls;
+        let y = it.y;
+        if (it.dymo) { const d = it.dymo, pv = d.px * 0.275, ph = d.px * 0.45; sp.style.background = d.bg; sp.style.padding = `${pv}px ${ph}px`; y -= pv; } // the strip grows with the text
+        const px = parseFloat(/([\d.]+)px/.exec(it.font)[1]);
+        const place2 = k => { sp.style.transform = `matrix(${it.m.join(',')}) translate(${it.x}px,${y + px * (1 - k) / 2}px)` + (it.align === 'center' ? ' translateX(-50%)' : it.align === 'right' || it.align === 'end' ? ' translateX(-100%)' : ''); };
+        place2(1); this.spans.push({ sp, it, px, place2, w0: 0 });
+      }
+    }
+    const cut = (s, parent) => { const d = place(el('div', 'fl-s', parent), s[0], s[1], s[2], s[3]); d.style.backgroundImage = `url(${atlas})`; d.style.backgroundPosition = `-${s[4]}px -${s[5]}px`; d.style.backgroundSize = `${AW}px ${AH}px`; return d; };
+    const tint = (s, parent) => { const d = place(el('div', 'fl-s fl-m', parent), s[0], s[1], s[2], s[3]); for (const p of ['mask', 'webkitMask']) { d.style[p + 'Image'] = `url(${atlas})`; d.style[p + 'Position'] = `-${s[4]}px -${s[5]}px`; d.style[p + 'Size'] = `${AW}px ${AH}px`; } return d; };
+    const face = (f, rad, mats) => { // a canvas on a perspective face; masked when something in front covers part of it
+      const b = f.mask || f.box, w = place(el('div', 'fl-f', gC), b[0], b[1], b[2], b[3]), dx = f.box[0] - b[0], dy = f.box[1] - b[1];
+      if (f.mask) for (const p of ['mask', 'webkitMask']) { w.style[p + 'Image'] = `url(${atlas})`; w.style[p + 'Position'] = `-${f.mask[4]}px -${f.mask[5]}px`; w.style[p + 'Size'] = `${AW}px ${AH}px`; w.style[p + 'Repeat'] = 'no-repeat'; }
+      const cv = el('canvas', '', w); cv.width = f.cw; cv.height = f.ch; cv.style.width = f.cw + 'px'; cv.style.height = f.ch + 'px';
+      cv.style.borderRadius = rad === 'c' ? '50%' : rad ? `${rad[0]}px / ${rad[1]}px` : '';
+      const T = mats.map(m => `translate(${dx}px,${dy}px) ${m3d(m)}`); cv.style.transform = T[0];
+      const Hs = mats.map(m => { const h = H3(m); return { h, inv: inv3(h), ox: f.box[0], oy: f.box[1] }; });
+      return { cv, c: cv.getContext('2d'), T, Hs };
+    };
+    // one pose of a lever or knob: the full frame (part + its shadow) under the text, the part alone over it
+    const pose = (s, top) => { const ds = [s && cut(s, gB), top && cut(top, gL)].filter(Boolean); ds.forEach(d => d.style.display = 'none'); return ds; };
+    const show = (ds, on) => { if (ds) for (const d of ds) d.style.display = on ? '' : 'none'; };
+    const quadHit = (H, cw, ch) => (x, y) => { const [u, v] = apply3(H.inv, x - H.ox, y - H.oy); return u >= 0 && v >= 0 && u <= cw && v <= ch ? [u, v] : null; };
+
+    L.els.forEach((E, i) => {
+      const p = parts[i], o = p.o || {}, it = { k: E.k, o, last: -9 };
+      if (E.k === 'screen') {
+        const F = face(E, E.rad, [E.m]), pal = typeof o.pal === 'string' ? PAL[o.pal] : o.pal, zones = [];
+        it.every = o.every ?? 0.5; const scr = { id: `${name}.screen${this.screens.length + 1}`, cv: F.cv, it, bg: pal.bg, draw: o.draw && o.draw.name !== 'draw' ? o.draw.name : '' }; this.screens.push(scr);
+        it.fn = (s, t) => {
+          const c = F.c, W = F.cv.width, H = F.cv.height; c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.fillStyle = pal.bg; c.fillRect(0, 0, W, H);
+          zones.length = 0; c.save(); o.draw(c, W, H, s, t, pal, (x, y, w, h, fn) => zones.push([x, y, w, h, fn])); c.restore();
+          if (o.glass !== false) {
+            c.fillStyle = 'rgba(0,0,0,.28)'; c.fillRect(0, 0, W, 5); c.fillRect(0, 0, 4, H);
+            c.fillStyle = 'rgba(255,255,255,.07)'; c.beginPath(); c.moveTo(W * 0.06, 0); c.lineTo(W * 0.3, 0); c.lineTo(W * 0.12, H); c.lineTo(-W * 0.12, H); c.fill();
+            c.beginPath(); c.moveTo(W * 0.34, 0); c.lineTo(W * 0.39, 0); c.lineTo(W * 0.21, H); c.lineTo(W * 0.16, H); c.fill();
+          }
+          if (o.crack) { c.strokeStyle = 'rgba(255,255,255,.55)'; c.lineWidth = 1.6; for (const line of o.crack) { c.beginPath(); line.forEach(([u, v], j) => j ? c.lineTo(u * W, v * H) : c.moveTo(u * W, v * H)); c.stroke(); } }
+        };
+        if (E.zones) { const q = quadHit(F.Hs[0], E.cw, E.ch), H0 = F.Hs[0]; this.hits.push(scr.hit = { z: 2, poly: [[0, 0], [E.cw, 0], [E.cw, E.ch], [0, E.ch]].map(([u, v]) => { const [x, y] = apply3(H0.h, u, v); return [x + H0.ox, y + H0.oy]; }), test: q, fn: (uv) => st => { const [X, Y] = uv; for (let j = zones.length - 1; j >= 0; j--) { const z = zones[j]; if (X >= z[0] && X <= z[0] + z[2] && Y >= z[1] && Y <= z[1] + z[3]) { z[4](st); return; } } } }); }
+      } else if (E.k === 'gauge') {
+        const F = face(E.face, 'c', [E.face.m]), N = E.needle, nw = place(el('div', 'fl-n', gD), N.box[0], N.box[1], N.box[2], N.box[3]);
+        const plane = el('div', '', nw); plane.style.width = plane.style.height = N.n + 'px'; plane.style.transform = m3d(N.m);
+        const turn = el('div', '', plane), q = el('div', '', turn); q.style.backgroundImage = `url(${atlas})`; q.style.backgroundPosition = `-${N.spr[4]}px -${N.spr[5]}px`; q.style.backgroundSize = `${AW}px ${AH}px`;
+        q.style.animationDelay = `-${(p.a[0] * 9 * 90) % 565}ms`;
+        const r = p.a[2], a0 = (o.a0 ?? 215) * Math.PI / 180, a1 = (o.a1 ?? -35) * Math.PI / 180, ang = v => a0 + (Math.min(o.max, Math.max(o.min, v)) - o.min) / (o.max - o.min) * (a1 - a0);
+        let cur = ang(o.min), tg = cur, shown = NaN; it.every = 9;
+        it.fn = s => {
+          const c = F.c, S = F.cv.width, R = S / 2, pt = (v, k) => [R + Math.cos(ang(v)) * R * k, R - Math.sin(ang(v)) * R * k]; c.clearRect(0, 0, S, S);
+          c.fillStyle = o.face || '#e4dcc4'; c.beginPath(); c.arc(R, R, R, 0, 7); c.fill();
+          for (const z of (o.zones ? o.zones(s) : [])) { c.beginPath(); c.arc(R, R, R * 0.86, -ang(z[0]), -ang(z[1]), false); c.strokeStyle = z[2]; c.lineWidth = R * 0.13; c.stroke(); }
+          c.strokeStyle = o.ink || '#2a2622'; c.fillStyle = o.ink || '#2a2622';
+          const st = o.step || (o.max - o.min) / 6, sub = o.sub || 2;
+          for (let v = o.min, j = 0; v <= o.max + 1e-6; v += st / sub, j++) { const big = j % sub === 0, a = pt(v, 0.93), b = pt(v, big ? 0.74 : 0.83); c.lineWidth = big ? R * 0.045 : R * 0.022; c.beginPath(); c.moveTo(...a); c.lineTo(...b); c.stroke();
+            if (big && o.nums !== false) { const n = pt(v, 0.56); c.font = `700 ${R * 0.21}px ${F_SLAB}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(Math.round(v)), ...n); } }
+          c.font = `800 ${R * 0.17}px ${F_SLAB}`; c.textAlign = 'center'; c.letterSpacing = R * 0.012 + 'px'; c.fillText(this.tr && o.label ? this.tr(o.label, 'screen') : (o.label || ''), R, R * 1.42); c.letterSpacing = '0px';
+          if (o.read) { c.font = `700 ${R * 0.3}px ${F_MONO}`; c.fillText(o.read(s), R, R * 1.72); }
+          c.fillStyle = 'rgba(255,255,255,.16)'; c.beginPath(); c.moveTo(R * 0.5, 0); c.lineTo(R * 0.95, 0); c.lineTo(R * 0.45, S); c.lineTo(0, S); c.fill();
+          c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 5; c.beginPath(); c.arc(R, R, R - 2, 0, 7); c.stroke();
+          tg = ang(o.get(s));
+        };
+        it.tick = dt => { cur += (tg - cur) * Math.min(1, dt * 5); if (Math.abs(cur - shown) > 1e-4 || shown !== shown) { shown = cur; turn.style.transform = `rotate(${-cur}rad)`; } };
+      } else if (E.k === 'key') {
+        const F = face(E.top, E.top.rad, [E.top.m, E.top.ms]), sunk = E.sunk ? cut(E.sunk, gB) : null; if (sunk) sunk.style.display = 'none';
+        const lit = o.color || '#ffab2e', dark = o.dark || '#34353a'; let down = null;
+        it.every = o.click ? 0.12 : 0.45;
+        it.fn = (s, t) => {
+          const st = o.get ? o.get(s) : 'off', c = F.c, W = F.cv.width, H = F.cv.height, blink = st === 'hot' && (t * 2.2 % 1) < 0.5;
+          const on = st === 'on' || blink, bg = on ? (st === 'hot' ? '#ff5533' : lit) : (st === 'hot' ? '#7a1c12' : dark), fg = on ? '#1b181a' : (st === 'locked' ? '#77756e' : (o.dimText || shade(lit, -0.08, -0.25)));
+          c.fillStyle = bg; c.fillRect(0, 0, W, H);
+          if (on) { c.fillStyle = 'rgba(255,255,255,.28)'; c.fillRect(0, 0, W, H * 0.16); } else { c.fillStyle = 'rgba(255,255,255,.07)'; c.fillRect(0, 0, W, H * 0.14); }
+          if (o.led) { c.fillStyle = st === 'on' ? '#ff4a32' : (blink ? '#fff' : '#4a1712'); c.fillRect(W * 0.12, H * 0.1, W * 0.76, H * 0.16); }
+          const raw = String(typeof o.label === 'function' ? o.label(s) : o.label), label = this.tr ? raw.split('\n').map(l => this.tr(l, 'key')).join('\n') : raw;
+          let lines = label.split('\n');
+          const size = ls => Math.min(H * (o.led ? 0.3 : 0.36) / Math.max(1, ls.length * 0.72), W * 1.5 / Math.max(...ls.map(l => l.length), 2));
+          const widest = (ls, p) => { c.font = `800 ${p}px ${F_SLAB}`; return Math.max(...ls.map(l => c.measureText(l).width)); };
+          let px = size(lines), maxW = W * 0.88;
+          if (widest(lines, px) > maxW) { // fit to the key: two lines if it has a space and would get small, then narrow
+            if (lines.length === 1 && / /.test(lines[0]) && maxW / widest(lines, px) < 0.8) { const w = lines[0].split(' '); let best = null; for (let i = 1; i < w.length; i++) { const a = [w.slice(0, i).join(' '), w.slice(i).join(' ')], m = Math.max(a[0].length, a[1].length); if (!best || m < best.m) best = { a, m }; } lines = best.a; px = size(lines); }
+            const ww = widest(lines, px); if (ww > maxW) px *= maxW / ww;
+          }
+          c.font = `800 ${px}px ${F_SLAB}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = fg;
+          const cy = H * (o.led ? 0.58 : (o.hot ? 0.44 : 0.5)); lines.forEach((l, j) => c.fillText(l, W / 2, cy + (j - (lines.length - 1) / 2) * px * 1.05));
+          if (o.hot) { c.font = `700 ${H * 0.2}px ${F_MONO}`; c.globalAlpha = 0.8; c.fillText(o.hot, W / 2, H * 0.83); c.globalAlpha = 1; }
+          if (st === 'locked') { c.strokeStyle = '#77756e'; c.lineWidth = 2; c.beginPath(); c.moveTo(W * 0.1, H * 0.9); c.lineTo(W * 0.9, H * 0.1); c.stroke(); }
+          const d = st === 'on'; if (d !== down) { down = d; F.cv.style.transform = F.T[d ? 1 : 0]; if (sunk) sunk.style.display = d ? '' : 'none'; }
+        };
+        if (o.click && E.hit) this.hits.push({ z: 1, poly: E.hit, test: (x, y) => inPoly(E.hit, x, y), fn: () => o.click });
+      } else if (E.k === 'toggle') {
+        const frames = E.frames.map((s, j) => pose(s, (E.tops || [])[j])), lamp = E.lamp ? tint(E.lamp, gA) : null;
+        let cur = 0.5, tg = 0.5, fi = -1, col = '';
+        it.every = 0.45;
+        it.fn = (s, t) => { const st = o.get(s); tg = st === 'on' || st === 'hot' ? -0.8 : 0.8;
+          const c = st === 'on' ? (o.color || '#6dff8f') : st === 'hot' ? ((t * 2.2 % 1) < 0.5 ? '#ff5533' : '#7a1c12') : st === 'locked' ? '#3a2a22' : '#2e3330';
+          if (lamp && c !== col) { col = c; lamp.style.backgroundColor = c; } };
+        it.tick = dt => { cur += (tg - cur) * Math.min(1, dt * 12); let best = 0; E.angles.forEach((a, j) => { if (Math.abs(a - cur) < Math.abs(E.angles[best] - cur)) best = j; });
+          if (best !== fi) { show(frames[fi], false); fi = best; show(frames[fi], true); } };
+        if (o.click && E.hit) this.hits.push({ z: 1, poly: E.hit, test: (x, y) => inPoly(E.hit, x, y), fn: () => o.click });
+      } else if (E.k === 'knob') {
+        const frames = E.frames.map((s, j) => pose(s, (E.tops || [])[j])); let fi = -1;
+        it.every = 9;
+        it.fn = s => { const j = Math.max(0, Math.min(frames.length - 1, o.get ? o.get(s) : 0)); if (j !== fi) { show(frames[fi], false); fi = j; show(frames[fi], true); } };
+        if (o.click && E.hit) this.hits.push({ z: 1, poly: E.hit, test: (x, y) => inPoly(E.hit, x, y), fn: () => o.click });
+      } else if (E.k === 'ledbar') {
+        const n = p.a[4], cells = E.cells.map(s => s ? tint(s, gA) : null), cols = [];
+        it.every = 0.45;
+        it.fn = (s, t) => { const v = o.get(s), lit = Math.round(v * n);
+          cells.forEach((d, j) => { if (!d) return; const c0 = o.col ? o.col((j + 0.5) / n, s) : '#ffab2e'; let c = j < lit ? c0 : mix(c0, '#17171a', 0.84);
+            if (o.blink && o.blink(s) && j < lit && (t * 2.2 % 1) > 0.5) c = mix(c0, '#17171a', 0.5); if (cols[j] !== c) { cols[j] = c; d.style.backgroundColor = c; } }); };
+      } else if (E.k === 'lamp') {
+        const d = E.mask ? tint(E.mask, gA) : null; let col = '';
+        it.every = 0.3;
+        it.fn = (s, t) => { const st = o.get(s), c = st === 'on' ? o.color : st === 'blink' ? ((t * 2.2 % 1) < 0.5 ? o.color : mix(o.color, '#151515', 0.8)) : mix(o.color, '#151515', 0.82); if (d && c !== col) { col = c; d.style.backgroundColor = c; } };
+      }
+      this.items.push(it);
+    });
+    this.hits.sort((a, b) => b.z - a.z);
+    if (tr) queueMicrotask(() => this.translate(tr)); // after the layer is on the stage, so widths can be measured
+    // invisible hit shapes: only these take the pointer, so clicks on open view fall through to the game
+    const gE = el('div', '', root);
+    for (const h of this.hits.slice().reverse()) {
+      const xs = h.poly.map(p => p[0]), ys = h.poly.map(p => p[1]), x0 = Math.min(...xs), y0 = Math.min(...ys);
+      const d = h.div = place(el('div', 'fl-hit', gE), x0, y0, Math.max(...xs) - x0, Math.max(...ys) - y0);
+      d.style.clipPath = `polygon(${h.poly.map(([x, y]) => `${(x - x0).toFixed(1)}px ${(y - y0).toFixed(1)}px`).join(',')})`;
+    }
+  }
+  // switch the language: live panel text now, keys and dials on the next update(…, force)
+  translate(tr) {
+    this.tr = tr;
+    for (const S of this.spans) { // a longer translation of a plain label narrows to 1.25 × the original width; label tape grows instead
+      const { sp, it, px, place2 } = S; sp.textContent = it.s; sp.style.fontSize = ''; if (!S.w0) S.w0 = sp.offsetWidth;
+      const t = tr ? tr(it.s, it.dymo ? 'dymo' : 'label') : it.s; sp.textContent = t; let k = 1;
+      if (t !== it.s && !it.dymo && S.w0) { const w1 = sp.offsetWidth; if (w1 > S.w0 * 1.25) k = Math.max(0.6, S.w0 * 1.25 / w1); }
+      sp.style.fontSize = k < 1 ? px * k + 'px' : ''; place2(k);
+    }
+    for (const it of this.items) it.last = -9;
+  }
+  // a screen as a slot for the game's own interface: an element in that face's perspective, cw × ch CSS px
+  slot(id) {
+    const S = this.screens.find(x => x.id === id); if (!S) throw new Error('flat: no screen ' + id + ' (have ' + this.screens.map(x => x.id).join(', ') + ')');
+    if (!S.slot) { const d = el('div', 'fl-slot', S.cv.parentNode); d.style.width = S.cv.style.width; d.style.height = S.cv.style.height; d.style.transform = S.cv.style.transform; d.style.borderRadius = S.cv.style.borderRadius; d.style.background = S.bg;
+      S.cv.style.display = 'none'; S.it.fn = null; if (S.hit) { S.hit.off = true; if (S.hit.div) S.hit.div.remove(); } S.slot = d; }
+    return S.slot;
+  }
+  update(s, dt, force) {
+    this.t += dt;
+    for (const it of this.items) { if (it.tick) it.tick(dt); if (it.fn && (force || this.t - it.last >= it.every)) { it.last = this.t; it.fn(s, this.t); } }
+  }
+  pick(x, y) { // design-space point → st => void, or null
+    for (const h of this.hits) { if (h.off) continue; const r = h.test(x, y); if (r) return h.fn(r); }
+    return null;
+  }
+}
+
+/* the design space scaled into a host element (the game view) */
+export class FlatStage {
+  constructor(host) {
+    if (!styled) { styled = true; el('style', '', document.head).textContent = CSS; }
+    this.host = host; this.root = el('div', 'fl-stage', host); this.space = el('div', 'fl-space', this.root); this.k = 1; this.dx = 0; this.dy = 0;
+    this.ro = new ResizeObserver(() => this.fit()); this.ro.observe(host); this.fit();
+  }
+  fit() { this.k = this.host.clientWidth / DESIGN_W; this.apply(); }
+  shift(dx, dy) { this.dx = dx; this.dy = dy; this.apply(); } // design px
+  apply() { this.space.style.transform = `scale(${this.k}) translate(${this.dx}px,${this.dy}px)`; }
+  add(layer) { this.space.append(layer.root); return layer; }
+  toDesign(clientX, clientY) { const r = this.host.getBoundingClientRect(); return [(clientX - r.left) / this.k - this.dx, (clientY - r.top) / this.k - this.dy]; }
+  destroy() { this.ro.disconnect(); this.root.remove(); }
+}

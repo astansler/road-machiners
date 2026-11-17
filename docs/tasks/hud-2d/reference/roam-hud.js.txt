@@ -1,0 +1,74 @@
+// ROAM HUD \u00b7 2D \u00b7 mount the baked cab over the game view. No WebGL, no three.js.
+//
+//   import { mountHud } from './roam-hud.js';
+//   const hud = mountHud(viewElement, { state });   // viewElement: the 16:9 box over the game picture
+//   hud.update(newState);                           // after the game state changed (redraws what reads it)
+//   hud.covers(clientX, clientY);                   // true over HUD hardware: do not pass that click to the world
+//   mountHud(el, { state, lang: 'ru' });            // or hud.setLang('en' | 'ru'): labels, keys and screen words
+//   hud.slot('log.screen1')                         // a screen as a slot: put the game's own UI in that element
+//
+// Clicks and hotkeys call the handlers in layout.js (ACT, press) and menus.js. They edit the state object
+// in place, as the lab mock does; wire them to the game's own commands (see README.md).
+import { FlatStage, FlatLayer, DESIGN_W, DESIGN_H } from './flat.js';
+import { GRID, I18N } from './screens.js';
+import { makeTr, LANGS } from './i18n.js';
+import { VARIANT, HOTKEYS, ACT } from './layout.js';
+import { buildMenu } from './menus.js';
+import { BAKE } from './bake.js';
+export { HOTKEYS, ACT, BAKE, DESIGN_W, DESIGN_H, LANGS };
+
+export function mountHud(host, { state, keys = true, loop = true, onChange = null, history = [], lang = 'en', tr = null } = {}) {
+  tr = tr || makeTr(lang); I18N.tr = tr;
+  if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+  Object.assign(GRID, BAKE.fittedGrid);
+  let s = state;
+  const stage = new FlatStage(host);
+  const hud = stage.add(new FlatLayer(BAKE.layers.hud, VARIANT.build().parts, BAKE.dir, { tr, name: 'hud' }));
+  const data = { situations: { history: { log: history } } }; // the log menu lists s.log plus these older lines
+  const menus = {}; for (const k of ['log', 'truck']) menus[k] = stage.add(new FlatLayer(BAKE.layers[k], buildMenu(k, { data }).parts, BAKE.dir, { menu: true, tr, name: k }));
+  const layers = () => [hud, ...Object.values(menus).filter(m => !m.root.classList.contains('fl-away'))];
+
+  // alpha maps of the still pictures, so the game can tell HUD hardware from open view
+  const alpha = new Map();
+  for (const L of [hud, ...Object.values(menus)]) {
+    const img = L.root.querySelector('img'), read = () => { try { const k = 0.25, c = new OffscreenCanvas(Math.ceil(img.naturalWidth * k), Math.ceil(img.naturalHeight * k)), x = c.getContext('2d'); x.drawImage(img, 0, 0, c.width, c.height); alpha.set(L, { k, w: c.width, h: c.height, a: x.getImageData(0, 0, c.width, c.height).data }); } catch (e) {} };
+    img.crossOrigin = 'anonymous'; if (img.complete && img.naturalWidth) read(); else img.addEventListener('load', read, { once: true });
+  }
+  const covers = (cx, cy) => {
+    const [x, y] = stage.toDesign(cx, cy);
+    for (const L of layers()) { if (L.pick(x, y)) return true; const A = alpha.get(L), b = L.root.querySelector('img'); if (!A) continue;
+      const u = Math.floor((x - b.offsetLeft) * A.k), v = Math.floor((y - b.offsetTop) * A.k); if (u >= 0 && v >= 0 && u < A.w && v < A.h && A.a[(v * A.w + u) * 4 + 3] > 40) return true; }
+    return false;
+  };
+
+  const sync = () => { for (const [k, m] of Object.entries(menus)) m.root.classList.toggle('fl-away', k !== s.open); };
+  const force = () => { for (const L of [hud, ...Object.values(menus)]) L.update(s, 0, true); };
+  const act = fn => { fn(s); sync(); force(); if (onChange) onChange(s); };
+  const pick = (cx, cy) => { const [x, y] = stage.toDesign(cx, cy); const m = menus[s.open]; return (m && m.pick(x, y)) || hud.pick(x, y); };
+  const onClick = e => { const f = pick(e.clientX, e.clientY); if (f) { e.stopPropagation(); act(f); } };
+  stage.root.addEventListener('click', onClick);
+  const onKey = e => { if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable]')) return; const f = HOTKEYS[e.key.toLowerCase()]; if (f) { e.preventDefault(); act(f); } };
+  if (keys) addEventListener('keydown', onKey);
+
+  let raf = 0, last = performance.now();
+  const tick = dt => { for (const L of layers()) L.update(s, dt, false); };
+  const frame = now => { tick(Math.min(0.1, (now - last) / 1000)); last = now; raf = requestAnimationFrame(frame); };
+  sync(); force(); if (loop) raf = requestAnimationFrame(frame);
+  const all = () => [hud, ...Object.values(menus)];
+  const retr = t => { tr = t; I18N.tr = t; for (const L of all()) L.translate(t); force(); };
+  if (document.fonts) document.fonts.ready.then(() => retr(tr)); // canvases and label widths first measured before the fonts arrived
+
+  return {
+    get state() { return s; },
+    update(next) { if (next) s = next; sync(); force(); },  // call after the game state changed
+    tick,                                                   // with loop: false, call tick(dtSeconds) from the game loop
+    act, pick, covers,
+    setLang(l) { retr(makeTr(l)); },                         // 'en' | 'ru' (see i18n.js)
+    translate(fn) { retr(fn); },                            // or your own s => translated
+    slot(id) { const [layer] = id.split('.'); const L = layer === 'hud' ? hud : menus[layer]; if (!L) throw new Error('no layer ' + layer); return L.slot(id); },
+    screens: () => all().flatMap(L => L.screens.map(x => ({ id: x.id, draw: x.draw, width: x.cv.width, height: x.cv.height }))),
+    open(kind) { s.open = kind; sync(); force(); },         // 'log' | 'truck' | null
+    destroy() { cancelAnimationFrame(raf); removeEventListener('keydown', onKey); stage.destroy(); },
+    stage, layers: { hud, ...menus },
+  };
+}

@@ -1,0 +1,179 @@
+// One full game state (the lab's "Cruise" situation). The field list is in README.md.
+export const SAMPLE = {
+ "speed": 39,
+ "top": 90,
+ "limit": 81,
+ "hold": 39,
+ "heading": 118,
+ "out": 31,
+ "fuel": 34,
+ "tank": 60,
+ "fuelRate": -0.4,
+ "money": 200,
+ "supplies": 2,
+ "supMax": 20,
+ "day": 1,
+ "time": "8:17",
+ "eng": 80,
+ "engMax": 120,
+ "health": 100,
+ "load": 1851,
+ "loadMax": 4240,
+ "power": 1.5,
+ "powerMax": 6.6,
+ "sw": {
+  "route": 1,
+  "patch": 1,
+  "lights": 0,
+  "overdrive": 0
+ },
+ "locked": {
+  "overdrive": 1,
+  "cool": 1,
+  "aid": 1
+ },
+ "parts": [
+  {
+   "k": "cab",
+   "n": "Cab",
+   "hp": 100,
+   "pos": [
+    "cab"
+   ]
+  },
+  {
+   "k": "engine",
+   "n": "Stock engine",
+   "hp": 92,
+   "pos": [
+    "engine"
+   ]
+  },
+  {
+   "k": "turret",
+   "n": "MG turret",
+   "hp": 100,
+   "pos": [
+    "turret"
+   ]
+  },
+  {
+   "k": "trans",
+   "n": "Transmission",
+   "hp": 88,
+   "pos": [
+    "gen"
+   ]
+  },
+  {
+   "k": "tank",
+   "n": "Fuel tank",
+   "hp": 100,
+   "pos": [
+    "tank"
+   ]
+  },
+  {
+   "k": "wheels",
+   "n": "Wheels",
+   "hp": 95,
+   "pos": [
+    "wFL",
+    "wFR",
+    "wRL",
+    "wRR"
+   ]
+  },
+  {
+   "k": "cage",
+   "n": "Rebar cage",
+   "hp": 100,
+   "pos": [
+    "bed"
+   ]
+  }
+ ],
+ "weapons": [
+  {
+   "n": "MG turret",
+   "ammo": 5,
+   "mag": 5,
+   "st": "ready",
+   "cyc": 100,
+   "ic": "mg",
+   "stat": "6×4.2"
+  },
+  null,
+  null
+ ],
+ "fire": {
+  "auto": 1,
+  "all": 1,
+  "show": 1
+ },
+ "radio": "The heat wave broke. Engines run cooler, and the drivers may follow.",
+ "log": [
+  [
+   "8:11",
+   "Search done.",
+   "good"
+  ],
+  [
+   "8:09",
+   "Search started: stay parked about 4 turns.",
+   ""
+  ],
+  [
+   "7:55",
+   "Discovered Bowl",
+   "good"
+  ],
+  [
+   "7:52",
+   "Rocket rack fires at You, 0/3 hit (11 to 12%)",
+   "dim"
+  ]
+ ],
+ "contacts": [
+  [
+   "Bowl",
+   "town",
+   "1.2 km",
+   "neutral",
+   ""
+  ],
+  [
+   "Wreck",
+   "salvage",
+   "240 m",
+   "",
+   ""
+  ],
+  [
+   "Trader Mira Yates",
+   "Trader caravan",
+   "680 m",
+   "friendly",
+   ""
+  ]
+ ],
+ "alerts": [],
+ "objective": {
+  "t": "Contracts 1 / 3",
+  "lines": [
+   [
+    "Haul 6 Salt to Nose",
+    "due D2 18:00"
+   ],
+   [
+    "Survey: Glass Flats",
+    "+310 M"
+   ]
+  ],
+  "ctx": [
+   "E",
+   "Enter Bowl"
+  ]
+ },
+ "open": null
+};

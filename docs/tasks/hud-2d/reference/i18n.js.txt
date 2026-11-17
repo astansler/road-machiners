@@ -1,0 +1,36 @@
+// ROAM HUD v4 \u00b7 2D \u00b7 the HUD's own words in Russian. Only interface text is here: what the game sends in the
+// state (log lines, names, radio, contracts, the context action) arrives already in the player's language.
+// tr(s, where) returns the translation or s itself; where = 'label' | 'dymo' | 'key' | 'screen', and an entry
+// 'where:TEXT' wins over 'TEXT' (short forms for tight spots). Add a language by adding a dictionary to LANGS.
+const RU = {
+  // labels on the panels
+  ROUTE: 'МАРШРУТ', PATCH: 'РЕМОНТ', LIGHTS: 'ФАРЫ', OVERDR: 'ФОРСАЖ', TURN: 'ХОД',
+  FUEL: 'ТОПЛИВО', ENG: 'МОТОР', DRIVE: 'ВОЖДЕНИЕ', LOG: 'ЖУРНАЛ', 'DRIVER  C': 'ВОДИТЕЛЬ  C', 'TRUCK  I': 'МАШИНА  I',
+  MOUNTS: 'ОРУДИЯ', 'W.O.T. RADIO': 'РАЦИЯ W.O.T.', 'IN SIGHT': 'В ВИДУ', FIRE: 'ОГОНЬ', '1 SUPPLY': '1 ПРИПАС',
+  CARGO: 'ГРУЗ', 'FITTED \u00b7 TOUCH A PART': 'УСТАНОВЛЕНО \u00b7 ТКНИ ДЕТАЛЬ', SHOW: 'ПОКАЗАТЬ', ROLL: 'ЛЕНТА',
+  'dymo:FUEL': 'БАК', 'dymo:ENG': 'ДВС', // the two narrow LED bars
+  // handwriting and tape
+  'Lenka fixed it': 'Ленка чинила', 'Nose line junk': 'Хлам с линии Носа', 'weigh it first': 'сперва взвесь', '↑ sticks': '↑ заедает',
+  'tube is from a tank': 'трубка от танка', 'ribbon is nearly dry': 'лента почти сухая', 'arcs = [A]': 'дуги = [A]',
+  // keys
+  DRIVER: 'ВОДИТЕЛЬ', TRUCK: 'МАШИНА', MAP: 'КАРТА', JOURNAL: 'ДНЕВНИК', MENU: 'МЕНЮ', COOL: 'ОХЛАДИТЬ', AID: 'АПТЕЧКА',
+  'END TURN': 'КОНЕЦ ХОДА', AUTO: 'АВТО', ALL: 'ВСЕ', ARCS: 'ДУГИ', 'key:ENGINE': 'МОТОР', HULL: 'КОРПУС', FOOD: 'ЕДА', // item names (Stock engine…) are game data, so ENGINE alone only on the key
+  TROUBLE: 'БЕДЫ', 'GOOD NEWS': 'ХОРОШЕЕ', CHATTER: 'БОЛТОВНЯ', UP: 'ВВЕРХ', DOWN: 'ВНИЗ', CLOSE: 'ЗАКРЫТЬ', MOVE: 'ПЕРЕСТАВИТЬ', UNFIT: 'СНЯТЬ',
+  // screens
+  'KM/H': 'КМ/Ч', 'FUEL L': 'ТОПЛИВО Л', 'ENG °C': 'МОТОР °C', DRV: 'ВОД', SUP: 'ПРИП', TANK: 'БАК', LOAD: 'ГРУЗ', POWER: 'МОЩНОСТЬ',
+  READY: 'ГОТОВ', FIRING: 'ОГОНЬ', 'NO AMMO': 'НЕТ ПАТРОНОВ', ARMED: 'ВЗВЕДЁН', EMPTY: 'ПУСТО', BED: 'КУЗОВ', 'NOSE ▲': 'НОС ▲',
+  'HP / ARMOR': 'ПРОЧН / БРОНЯ', WEIGHT: 'ВЕС', TIER: 'УРОВЕНЬ', STRANDED: 'ЗАСТРЯЛ', 'STRANDED SOON': 'СКОРО ВСТАНЕШЬ',
+  SALT: 'СОЛЬ', PARTS: 'ЗАПЧАСТИ', 'SCRAP METAL': 'МЕТАЛЛОЛОМ', 'MACHINE TOOLS': 'СТАНКИ', GRAIN: 'ЗЕРНО', SORGUT: 'СОРГУТ', WATER: 'ВОДА', MEDS: 'ЛЕКАРСТВА', ELECTRONICS: 'ЭЛЕКТРОНИКА',
+  '\u00b7 \u00b7 \u00b7 no carrier \u00b7 \u00b7 \u00b7': '\u00b7 \u00b7 \u00b7 нет несущей \u00b7 \u00b7 \u00b7', '\u00b7 \u00b7 \u00b7 no carrier': '\u00b7 \u00b7 \u00b7 нет несущей',
+};
+const RU_RX = [ // lines made from words and numbers
+  [/^TANK (\S+)$/, 'БАК $1'], [/^LOAD (\S+) T$/, 'ГРУЗ $1 Т'], [/^PWR (\S+)$/, 'МОЩ $1'], [/^LIM (\S+)$/, 'ПРЕД $1'], [/^ENGINE (\S+)$/, 'МОТОР $1'],
+  [/^CONTRACTS (.+)$/, 'КОНТРАКТЫ $1'], [/^ROAD LOG \u00b7 DAY (\S+)$/, 'ДОРОЖНЫЙ ЖУРНАЛ \u00b7 ДЕНЬ $1'], [/^D(\d+)$/, 'Д$1'], [/^(\d+) IN SIGHT$/, '$1 В ВИДУ'],
+  [/^MOUNT (\d+) \u00b7 EMPTY$/, 'ОРУДИЕ $1 \u00b7 ПУСТО'], [/^RELOAD (\d+)T$/, 'ПЕРЕЗАРЯДКА $1Х'], [/^(\d+) CRATES \u00b7 (\S+) KG$/, '$1 ЯЩ. \u00b7 $2 КГ'],
+  [/^SUPPLIES (\S+)\s+FUEL (\S+) L$/, 'ПРИПАСЫ $1   ТОПЛИВО $2 Л'], [/^condition (\S+)$/, 'состояние $1'], [/^(\S+) of (\S+)$/, '$1 из $2'], [/^Range on (\S+) L$/, 'Запас хода на $1 Л'],
+];
+export const LANGS = { en: null, ru: { words: RU, rx: RU_RX } };
+export function makeTr(lang) {
+  const L = LANGS[lang]; if (!L) return null;
+  return (s, where) => { if (where && (where + ':' + s) in L.words) return L.words[where + ':' + s]; if (s in L.words) return L.words[s]; for (const [rx, to] of L.rx) if (rx.test(s)) return s.replace(rx, to); return s; };
+}

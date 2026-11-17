@@ -1,0 +1,114 @@
+// ROAM HUD v4 \u00b7 menus: each one is another piece of cab hardware that swings up over the dash.
+import { STUB as THREE } from './three-stub.js';
+import { Panel, Hud, box, toon, ink, shade, F_MONO, F_SLAB, F_HAND } from './kit-flat.js';
+import * as D from './screens.js';
+const { T, wrap } = D;
+
+export const ui = s => s.ui ||= { filter: 'all', scroll: 0, sel: 'Stock engine', tab: 'market', say: 'Mags looks in your bed before she looks at you.' };
+const close = s => { s.open = null; };
+const closeKey = (p, x, y, w, h, label = 'CLOSE') => p.key(x, y, w, h, { label, hot: 'ESC', get: () => 'on', click: close, color: '#ff6a4a', pop: 0.11 });
+const pick = (p, x, y, w, h, label, on, click, o = {}) => p.key(x, y, w, h, { label, get: s => on(s) ? 'on' : 'off', click, color: o.color || '#ffd75e', dimText: '#cfc7b0', ...o });
+const roller = (p, x, y, len) => { const g = new THREE.CylinderGeometry(0.15, 0.15, len, 20); g.rotateZ(Math.PI / 2); const m = new THREE.Mesh(g, toon('#2f3034')); m.castShadow = true; ink(m); p.add(m, x, y, 0.13); for (const sx of [-1, 1]) { const e = box(0.12, 0.42, 0.34, '#8d8a82', 0.03); p.add(e, x + sx * (len / 2 + 0.05), y, 0.14); } };
+
+/* ───────── full log ───────── */
+const TONE = { bad: '#b3321f', good: '#2f6b3a', warn: '#9a6a12', dim: '#8d8371', '': '#2a2622' };
+const FILTERS = [['all', 'ALL', () => true], ['bad', 'TROUBLE', l => l[2] === 'bad' || l[2] === 'warn'], ['good', 'GOOD NEWS', l => l[2] === 'good'], ['dim', 'CHATTER', l => l[2] === 'dim']];
+function history(data, s) { // today's lines first, then everything the other mock situations logged
+  const seen = new Set(), out = [];
+  for (const l of [...s.log, ...Object.values(data.situations).flatMap(x => x.log)]) { const k = l[0] + l[1]; if (!seen.has(k)) { seen.add(k); out.push(l); } }
+  return out.sort((a, b) => { const m = t => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm; }; return m(b[0]) - m(a[0]); });
+}
+function logMenu({ data }) {
+  const hud = new Hud(), K = '#d8ceb2';
+  const p = hud.add(new Panel(9.0, 5.3, { color: K, seed: 201, d: 0.6, r: 0.14, wear: 0.7 }).at(0, 1.55, 1.6, -0.06));
+  const rows = s => { const f = FILTERS.find(x => x[0] === ui(s).filter)[2], out = []; for (const l of history(data, s).filter(f)) wrap(l[1], 50).forEach((txt, i) => out.push([i ? '' : l[0], txt, l[2]])); return out; };
+  const VIS = 14;
+  p.screen(-1.5, -0.2, 5.5, 4.4, { pal: 'paper', pop: 0.05, frame: 0.1, bezel: '#3a3b40', glass: false, round: 0.02, every: 1, res: 1.2, draw: (c, W, H, s, t, P) => {
+    c.fillStyle = '#d9cfb2'; c.fillRect(0, 0, W * 0.045, H); c.fillRect(W * 0.955, 0, W * 0.045, H); c.fillStyle = '#3a3b40';
+    for (let y = H * 0.03; y < H; y += H * 0.055) { c.beginPath(); c.arc(W * 0.0225, y, W * 0.008, 0, 7); c.arc(W * 0.9775, y, W * 0.008, 0, 7); c.fill(); }
+    T(c, 'ROAD LOG \u00b7 DAY ' + s.day, W * 0.07, H * 0.055, H * 0.045, P.fg, 'left', 700); T(c, FILTERS.find(x => x[0] === ui(s).filter)[1], W * 0.93, H * 0.055, H * 0.034, P.dim, 'right');
+    c.fillStyle = P.fg; c.fillRect(W * 0.07, H * 0.095, W * 0.86, 3);
+    const all = rows(s), sc = Math.min(ui(s).scroll, Math.max(0, all.length - VIS)); ui(s).scroll = sc;
+    all.slice(sc, sc + VIS).forEach(([tm, txt, tone], i) => { const y = H * (0.15 + i * 0.058);
+      if (tm) { T(c, tm, W * 0.07, y, H * 0.036, P.dim); if (tone === 'bad' || tone === 'good') { c.fillStyle = TONE[tone]; c.fillRect(W * 0.055, y - H * 0.02, 5, H * 0.04); } }
+      T(c, txt, W * 0.18, y, H * 0.036, TONE[tone] ?? TONE[''], 'left', tone === 'dim' ? 400 : 700); });
+    T(c, (sc + 1) + '–' + Math.min(all.length, sc + VIS) + ' of ' + all.length, W * 0.93, H * 0.965, H * 0.03, P.dim, 'right');
+    if (!all.length) T(c, 'nothing on the roll', W / 2, H / 2, H * 0.04, P.dim, 'center');
+  } });
+  roller(p, -1.5, 2.22, 5.6);
+  p.dymo(2.95, 2.25, 'SHOW');
+  FILTERS.forEach(([k, label], i) => pick(p, 2.95, 1.8 - i * 0.5, 2.3, 0.42, label, s => ui(s).filter === k, s => { ui(s).filter = k; ui(s).scroll = 0; }));
+  p.dymo(2.95, -0.28, 'ROLL');
+  p.key(2.37, -0.72, 1.1, 0.5, { label: 'UP', get: () => 'off', click: s => { ui(s).scroll = Math.max(0, ui(s).scroll - 5); }, color: '#e9dfc4', dimText: '#e9dfc4' });
+  p.key(3.53, -0.72, 1.1, 0.5, { label: 'DOWN', get: () => 'off', click: s => { ui(s).scroll += 5; }, color: '#e9dfc4', dimText: '#e9dfc4' });
+  p.screen(2.95, -1.5, 2.3, 0.78, { pal: 'lcd', pop: 0.05, draw: D.contracts, every: 2 });
+  closeKey(p, 2.95, -2.25, 2.3, 0.44);
+  p.plate(-3.4, -2.52, 1.3, 0.16, ['GUIDESTAR TELEPRINTER', 'RELAY 31']); p.tape(0.3, -2.52, 1.4, 0.14, 'ribbon is nearly dry', 0.01); p.decal(-1.6, -2.48, 0.13, 'guild', 0.2); p.broken(-1, 1, 0.3); p.bolts(0.14);
+  return hud;
+}
+
+/* ───────── truck ───────── */
+const ITEMS = {
+  'Stock engine': { ic: 'stockEngine', part: 'engine', spec: [['HP / ARMOR', '50 / 4'], ['WEIGHT', '360 kg'], ['TIER', '1']], lore: 'The engine most trucks come with. Every garage in the basin knows it by ear and could rebuild it half asleep.' },
+  'MG turret': { ic: 'mg', part: 'turret', spec: [['ROLE', 'chip'], ['RANGE / ARC', '12 cells / 270°'], ['MAG / RELOAD', '5 / 2 turns'], ['DAMAGE / PEN', '2.5 / 5'], ['HP / ARMOR', '40 / 3'], ['WEIGHT', '110 kg']], lore: 'The workshop line at Nose turns these out by the crate. Nobody calls it a good gun, but it fires when it is dirty.' },
+  Cab: { ic: 'cabPickup', part: 'cab', spec: [['FIXED', 'part of the chassis']], lore: 'A pickup cab with a different color on each door, and glass from three other trucks. It has outlived every owner.' },
+  'Rebar cage': { ic: 'cage', part: 'cage', spec: [['HP / ARMOR', '60 / 2'], ['WEIGHT', '55 kg'], ['TIER', '1']], lore: 'Rebar bent into a frame around the cab. It stops little in a firefight, but the doors stay on their hinges.' },
+  'Supply locker': { ic: 'supplyLocker', spec: [['HP / ARMOR', '30 / 2'], ['WEIGHT', '60 kg'], ['TIER', '1']], lore: 'A steel locker bolted on for the road\'s small necessities: bread, rope, bandages, spares. Drivers fit the lock first and fill it second.' },
+  Transmission: { ic: 'transmission', part: 'trans', spec: [['FIXED', 'part of the chassis']], lore: 'Gears in an oiled case. Nobody thinks about one until it stops, and then nobody thinks about anything else.' },
+  Ammo: { ic: 'parts', spec: [['HOLDS', 'rounds for every mount']], lore: 'Belts and loose rounds in a tin. Counted twice before a run and never after.' },
+};
+export const GOODS = { salt: 'Salt', grain: 'Sorgut', water: 'Water', parts: 'Parts', scrap: 'Scrap metal', meds: 'Meds', tools: 'Machine tools', electronics: 'Electronics' };
+export const cargo = s => s.cargo ||= { salt: 6, parts: 3, scrap: 2, tools: 1 };
+function truckMenu() {
+  const hud = new Hud(), C = '#86a88c';
+  const p = hud.add(new Panel(10.6, 5.3, { color: C, seed: 211, d: 0.6, r: 0.14, wear: 0.7 }).at(0, 1.55, 1.6, -0.06));
+  p.screen(-3.75, -0.05, 2.7, 4.7, { pal: 'green', zones: true, every: 0.5, draw: (c, W, H, s, t, P, Z) => {
+    const hp = Object.fromEntries(s.parts.map(q => [q.k, q.hp])), G = D.GRID, cell = Math.min(W / (G.cols + 2.2), H * 0.9 / G.rows), ox = (W - G.cols * cell) / 2, oy = H * 0.07;
+    T(c, 'NOSE ▲', W / 2, H * 0.035, H * 0.026, P.dim, 'center');
+    c.strokeStyle = P.dim; c.lineWidth = 1; for (let i = 0; i <= G.cols; i++) { c.beginPath(); c.moveTo(ox + i * cell, oy); c.lineTo(ox + i * cell, oy + G.rows * cell); c.globalAlpha = 0.35; c.stroke(); } for (let j = 0; j <= G.rows; j++) { c.beginPath(); c.moveTo(ox, oy + j * cell); c.lineTo(ox + G.cols * cell, oy + j * cell); c.stroke(); } c.globalAlpha = 1;
+    const cellRect = (col, row, w, h, key, name) => { const X = ox + (col - 1) * cell + 3, Y = oy + (row - 1) * cell + 3, Wd = w * cell - 6, Hd = h * cell - 6, v = key ? hp[key] ?? 100 : 100, col2 = v < 40 ? P.hot : v < 70 ? P.warn : P.fg, sel = name && ui(s).sel === name;
+      c.fillStyle = col2; c.globalAlpha = sel ? 0.42 : 0.14; c.fillRect(X, Y, Wd, Hd); c.globalAlpha = 1; c.strokeStyle = col2; c.lineWidth = sel ? 4 : 2; c.strokeRect(X, Y, Wd, Hd);
+      if (name) { const px = Math.min(cell * 0.3, Wd / 5); name.toUpperCase().split(' ').forEach((wd, i, a) => T(c, wd.slice(0, Math.floor(Wd / (px * 0.52))), X + Wd / 2, Y + Hd / 2 + (i - (a.length - 1) / 2) * px * 1.05 - (key ? px * 0.5 : 0), px, col2, 'center'));
+        if (key) T(c, v + '%', X + Wd / 2, Y + Hd / 2 + px * (name.split(' ').length * 0.5 + 0.4), px, P.dim, 'center'); Z(X, Y, Wd, Hd, st => { ui(st).sel = name; }); } };
+    for (const it of G.items) cellRect(it.col, it.row, it.w, it.h, ITEMS[it.name]?.part, it.name);
+    cellRect(2, 8, 2, 1, 'tank'); T(c, 'TANK', ox + 2 * cell, oy + 7.5 * cell, cell * 0.26, P.dim, 'center');
+    for (const [col, row] of [[0, 2], [5, 2], [0, 10], [5, 10]]) cellRect(col, row, 1, 2, 'wheels');
+  } });
+  p.dymo(-3.75, 2.5, 'FITTED \u00b7 TOUCH A PART');
+  p.screen(-0.35, 0.95, 3.6, 2.7, { pal: 'paper', pop: 0.04, frame: 0.08, bezel: '#3a3b40', glass: false, round: 0.02, every: 1, draw: (c, W, H, s, t, P) => {
+    const name = ui(s).sel, it = ITEMS[name] || ITEMS.Cab, part = s.parts.find(q => q.k === it.part);
+    c.fillStyle = '#d6ccb0'; c.fillRect(W * 0.04, H * 0.06, H * 0.36, H * 0.36); c.strokeStyle = P.fg; c.lineWidth = 2; c.strokeRect(W * 0.04, H * 0.06, H * 0.36, H * 0.36); D.iconColor(c, it.ic, W * 0.04 + 4, H * 0.06 + 4, H * 0.36 - 8);
+    T(c, name.toUpperCase(), W * 0.04 + H * 0.4, H * 0.12, H * 0.085, P.fg, 'left', 800, F_SLAB);
+    it.spec.forEach(([a, b], i) => { const y = H * (0.22 + i * 0.062); T(c, a, W * 0.04 + H * 0.4, y, H * 0.042, P.dim); T(c, b, W * 0.96, y, H * 0.042, P.fg, 'right'); });
+    c.fillStyle = P.dim; c.fillRect(W * 0.04, H * 0.62, W * 0.92, 2);
+    wrap(it.lore, 46).slice(0, 4).forEach((l, i) => T(c, l, W * 0.04, H * (0.69 + i * 0.065), H * 0.043, P.fg, 'left', 400));
+    if (part) T(c, 'condition ' + part.hp + '%', W * 0.96, H * 0.95, H * 0.075, part.hp < 40 ? P.hot : part.hp < 70 ? '#9a6a12' : '#2f6b3a', 'right', 700, F_HAND);
+  } });
+  p.key(-1.6, -0.82, 1.1, 0.44, { label: 'PATCH', get: () => 'off', click: () => {}, color: '#ffd75e', dimText: '#cfc7b0' }); p.key(-0.38, -0.82, 1.1, 0.44, { label: 'MOVE', get: () => 'off', click: () => {}, color: '#ffd75e', dimText: '#cfc7b0' }); p.key(0.84, -0.82, 1.1, 0.44, { label: 'UNFIT', get: () => 'off', click: () => {}, color: '#ffd75e', dimText: '#cfc7b0' });
+  p.screen(-0.35, -1.75, 3.6, 1.0, { pal: 'amber', pop: 0.06, every: 1, draw: (c, W, H, s, t, P) => {
+    const bar = (y, label, v, max, txt) => { T(c, label, W * 0.03, y, H * 0.15, P.dim); c.strokeStyle = P.dim; c.lineWidth = 2; c.strokeRect(W * 0.2, y - H * 0.09, W * 0.42, H * 0.18); c.fillStyle = P.fg; c.fillRect(W * 0.2 + 3, y - H * 0.09 + 3, (W * 0.42 - 6) * Math.min(1, v / max), H * 0.18 - 6); T(c, txt, W * 0.97, y, H * 0.15, P.fg, 'right'); };
+    bar(H * 0.2, 'LOAD', s.load, s.loadMax, s.load.toLocaleString('en-US') + ' / ' + s.loadMax.toLocaleString('en-US') + ' KG'); bar(H * 0.5, 'POWER', s.power, s.powerMax, s.power + ' / ' + s.powerMax); bar(H * 0.8, 'HULL', D.hull(s), 100, D.hull(s) + '%');
+  } });
+  p.screen(3.45, 0.55, 3.1, 3.5, { pal: 'amber', every: 1, draw: (c, W, H, s, t, P) => {
+    const cg = Object.entries(cargo(s)).filter(e => e[1] > 0), n = cg.reduce((a, e) => a + e[1], 0);
+    T(c, 'BED', W * 0.04, H * 0.06, H * 0.05, P.dim); T(c, n + ' CRATES \u00b7 ' + n * 50 + ' KG', W * 0.96, H * 0.06, H * 0.05, P.fg, 'right'); c.fillStyle = P.dim; c.fillRect(W * 0.04, H * 0.11, W * 0.92, 2);
+    cg.slice(0, 7).forEach(([k, q], i) => { const y = H * (0.19 + i * 0.115); D.icon(c, k, W * 0.03, y - H * 0.05, H * 0.1, P.fg); T(c, GOODS[k].toUpperCase(), W * 0.19, y, H * 0.05, P.fg); T(c, '×' + q, W * 0.96, y, H * 0.055, P.fg, 'right'); });
+    if (!cg.length) T(c, 'EMPTY BED', W / 2, H / 2, H * 0.06, P.dim, 'center');
+    T(c, 'SUPPLIES ' + s.supplies + '/' + s.supMax + '   FUEL ' + s.fuel + '/' + s.tank + ' L', W * 0.04, H * 0.95, H * 0.042, P.dim);
+  } });
+  p.dymo(3.45, 2.5, 'CARGO'); closeKey(p, 3.45, -1.95, 3.1, 0.5);
+  p.plate(3.45, -1.42, 1.5, 0.16, ['L. BRANN', 'PIVOT RINGS \u00b7 SALVAGE YARD']); p.hazard(-0.35, -2.42, 3.6, 0.1); p.scrawl(1.9, 2.48, 'weigh it first', { size: 0.13, color: '#2a2622', rot: -0.03 }); p.decal(-2.0, -2.42, 0.15, 'pierce', -0.2); p.broken(1, 1, 0.3); p.bolts(0.14);
+  return hud;
+}
+
+/* ───────── town: Bowl ───────── */
+export const PRICE = { grain: 5, water: 9, salt: 11, parts: 7, scrap: 6, meds: 25, tools: 38, electronics: 44 };
+export const PEOPLE = [ // mock lines for the lab, written in the game's voice
+  ['Mags', 'weighing beam, gateway post', 'Mags: "Six of salt. The beam says five and a half. The beam has been wrong since my mother ran it."'],
+  ['Hattie', 'runs the canteen in the gateway', 'Hattie: "Water is a bucket, soup is a bowl, and news is free if you eat."'],
+  ['Ruben', 'canal warden', 'Ruben: "The third lock is leaking again. If you see a wet road, that is ours. Bring it back."'],
+  ['Dag', 'Bowl Farmers patrol', 'Dag: "We count trucks going out and trucks coming in. I like it when the numbers agree."'],
+  ['Jory Baptiste', 'speaks for the tenants', 'Jory: "The Senate votes on the water. We carry it. Guess who is thirsty."'],
+  ['Renata Sayle', 'Guidestar manager', 'Renata: "A message to Nose is four M\'s. A reply is their problem."'],
+];
+export function buildMenu(kind, ctx) { return kind === 'log' ? logMenu(ctx) : truckMenu(ctx); }
